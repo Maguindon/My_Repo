@@ -4,13 +4,14 @@ A powerful AI comparison tool that allows you to send the same prompt to multipl
 
 ## 🌟 Features
 
-- **Multi-AI Comparison**: Send one prompt to Claude (Anthropic) and ChatGPT (OpenAI) at the same time
+- **Multi-AI Comparison**: Send one prompt to Claude (Anthropic), ChatGPT (OpenAI), and Gemini (Google) at the same time
 - **Parallel Processing**: Fast, concurrent API calls using Promise.allSettled()
 - **Real-time Responses**: Live comparison of AI responses as they arrive
 - **Dark/Light Mode**: Beautiful theme switching with smooth transitions
 - **Error Resilience**: Graceful handling of API failures with fallback responses
 - **Responsive Design**: Works perfectly on desktop and mobile devices
 - **Easy Setup**: Clear instructions for API key configuration
+- **Prompt Library**: Store reusable prompts alongside Git commands with instant copy buttons and local persistence
 
 ## 🚀 Getting Started
 
@@ -50,11 +51,13 @@ The app works out-of-the-box with mock responses for testing. To use real AI API
 ```env
 REACT_APP_ANTHROPIC_API_KEY=your_anthropic_api_key_here
 REACT_APP_OPENAI_API_KEY=your_openai_api_key_here
+REACT_APP_GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 3. **Get your API keys**:
    - **Anthropic (Claude)**: [https://console.anthropic.com/](https://console.anthropic.com/)
    - **OpenAI (ChatGPT)**: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+   - **Google (Gemini)**: [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 
 4. **Restart your development server**:
 ```bash
@@ -66,10 +69,11 @@ npm start
 ## 🎯 How to Use
 
 1. **Enter your prompt** in the text area
-2. **Click "Send to All AI Tools"** to send the prompt to both Claude and ChatGPT
+2. **Click "Send to All AI Tools"** to send the prompt to Claude, ChatGPT, and Gemini
 3. **Compare responses** side by side as they arrive
-4. **Toggle dark mode** using the moon/sun button in the header
-5. **View setup instructions** by clicking "Show API Setup Instructions"
+4. **Open the Prompt Library tab** to copy default Git workflows or save your own prompts for reuse
+5. **Toggle dark mode** using the moon/sun button in the header
+6. **View setup instructions** by clicking "Show API Setup Instructions"
 
 ## 🛠️ Available Scripts
 
@@ -101,6 +105,7 @@ src/
 ### **AI Integration**
 - **Claude (Anthropic)**: Uses Claude 3 Sonnet model
 - **ChatGPT (OpenAI)**: Uses GPT-4 model
+- **Gemini (Google)**: Uses Gemini 1.5 Flash model
 - **Parallel API Calls**: Both services called simultaneously for faster responses
 - **Error Handling**: Individual service failures don't affect others
 
@@ -109,6 +114,7 @@ src/
 - **Dark Mode**: Toggle between light and dark themes
 - **Responsive**: Optimized for all screen sizes
 - **Smooth Animations**: Elegant transitions and hover effects
+- **Prompt Library**: Built-in tab with AI prompt templates, Git command shortcuts, copy-to-clipboard buttons, and local storage persistence
 
 ### **Developer Experience**
 - **Environment Variables**: Secure API key management
@@ -169,7 +175,7 @@ If you encounter any issues or have questions:
 
 - Built with [React](https://reactjs.org/)
 - Styled with modern CSS and CSS variables
-- AI services powered by [Anthropic](https://anthropic.com/) and [OpenAI](https://openai.com/)
+- AI services powered by [Anthropic](https://anthropic.com/), [OpenAI](https://openai.com/), and [Google AI Studio](https://aistudio.google.com/)
 
 ---
 
