@@ -102,3 +102,10 @@ test('allows adding and removing a custom prompt in the library', async () => {
   await userEvent.click(screen.getByRole('button', { name: /Remove/i }));
   expect(screen.queryByText(/Weekly standup recap/i)).not.toBeInTheDocument();
 });
+
+test('renders the Better.AI headline and prompt input', () => {
+  render(<App />);
+  expect(screen.getByRole('heading', { level: 1, name: /Better\. AI/ })).toBeInTheDocument();
+  expect(screen.getByLabelText(/Enter your prompt/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Send to All AI Tools/i })).toBeInTheDocument();
+});

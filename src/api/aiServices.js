@@ -1,242 +1,194 @@
 // AI Services API Integration
 // Centralised helpers to manage multiple providers/models and authentication state.
 
+const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
+
 export const PROVIDER_CONFIG = {
   anthropic: {
     id: 'anthropic',
     displayName: 'Anthropic Claude',
-    baseUrl: 'https://api.anthropic.com/v1',
-    defaultModel: 'claude-3-sonnet-20240229',
-    environmentKey: 'REACT_APP_ANTHROPIC_API_KEY',
-    versionHeader: '2023-06-01'
+    defaultModel: 'claude-3-haiku-20240307'
   },
   openai: {
     id: 'openai',
     displayName: 'OpenAI ChatGPT',
-    baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4',
-    environmentKey: 'REACT_APP_OPENAI_API_KEY'
+    defaultModel: 'gpt-4o-mini'
   },
   gemini: {
     id: 'gemini',
     displayName: 'Google Gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModel: 'gemini-1.5-flash',
-    environmentKey: 'REACT_APP_GEMINI_API_KEY'
+    defaultModel: 'gemini-1.5-flash'
   }
 };
 
-const getEnvironmentApiKey = (providerId) => {
-  if (providerId === 'anthropic') {
-    return process.env.REACT_APP_ANTHROPIC_API_KEY || '';
-  }
+const buildBackendEndpoint = (providerId, path) => `${API_BASE_URL}/api/${providerId}${path}`;
 
-  if (providerId === 'openai') {
-    return process.env.REACT_APP_OPENAI_API_KEY || '';
+const friendlyProviderName = (providerId) => {
+  switch (providerId) {
+    case 'anthropic':
+      return 'Claude';
+    case 'openai':
+      return 'ChatGPT';
+    case 'gemini':
+      return 'Gemini';
+    default:
+      return providerId;
   }
-
-  if (providerId === 'gemini') {
-    return process.env.REACT_APP_GEMINI_API_KEY || '';
-  }
-
-  return '';
 };
 
-const resolveApiKey = (providerId, overrideKey) => {
-  const trimmed = overrideKey?.trim();
-  if (trimmed) {
-    return trimmed;
+const performBackendRequest = async ({
+  providerId,
+  path,
+  payload,
+  prompt,
+  model
+}) => {
+  const config = PROVIDER_CONFIG[providerId];
+  if (!config) {
+    throw new Error(`Unsupported provider: ${providerId}`);
   }
-  return getEnvironmentApiKey(providerId) || `missing-${providerId}-api-key`;
-};
 
-const anthropicRequest = async ({ prompt, model, apiKey }) => {
-  const provider = PROVIDER_CONFIG.anthropic;
+  const fallbackModel = model || config.defaultModel;
 
   try {
-    const response = await fetch(`${provider.baseUrl}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': provider.versionHeader
-      },
-      body: JSON.stringify({
-        model: model || provider.defaultModel,
-        max_tokens: 1000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Claude API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return {
-      content: data.content?.[0]?.text || '',
-      model: data.model || model || provider.defaultModel
-    };
-  } catch (error) {
-    console.error('Claude API error:', error);
-    return {
-      content: `Claude's response to: "${prompt}"\n\nThis is a mock response from Claude. To use the real API, add your Anthropic API key to the environment variables or authenticate the model.\n\nError: ${error.message}`,
-      model: model || `${provider.defaultModel} (mock)`
-    };
-  }
-};
-
-const openAIRequest = async ({ prompt, model, apiKey }) => {
-  const provider = PROVIDER_CONFIG.openai;
-
-  try {
-    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: model || provider.defaultModel,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        max_tokens: 1000,
-        temperature: 0.7
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return {
-      content: data.choices?.[0]?.message?.content || '',
-      model: data.model || model || provider.defaultModel
-    };
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    return {
-      content: `ChatGPT's response to: "${prompt}"\n\nThis is a mock response from ChatGPT. To use the real API, add your OpenAI API key to the environment variables or authenticate the model.\n\nError: ${error.message}`,
-      model: model || `${provider.defaultModel} (mock)`
-    };
-  }
-};
-
-const geminiRequest = async ({ prompt, model, apiKey }) => {
-  const provider = PROVIDER_CONFIG.gemini;
-  const targetModel = encodeURIComponent(model || provider.defaultModel);
-  const encodedKey = encodeURIComponent(apiKey);
-  const url = `${provider.baseUrl}/models/${targetModel}:generateContent?key=${encodedKey}`;
-
-  try {
-    const response = await fetch(url, {
+    const response = await fetch(buildBackendEndpoint(providerId, path), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          maxOutputTokens: 1024,
-          temperature: 0.7
-        }
-      })
+      body: JSON.stringify(payload)
     });
 
-    if (!response.ok) {
-      throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      throw new Error('Failed to parse response payload');
     }
 
-    const data = await response.json();
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const content = parts
-      .map((part) => part?.text)
-      .filter(Boolean)
-      .join('\n');
+    if (!response.ok) {
+      throw new Error(data?.error || response.statusText || 'Unknown error');
+    }
 
     return {
-      content,
-      model: data.model || model || provider.defaultModel
+      content: data.content || '',
+      model: data.model || fallbackModel
     };
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error(`${config.displayName} API error:`, error);
+    const friendlyName = friendlyProviderName(providerId);
     return {
-      content: `Gemini's response to: "${prompt}"\n\nThis is a mock response from Gemini. To use the real API, add your Google AI Studio key to the environment variables or authenticate the model.\n\nError: ${error.message}`,
-      model: model || `${provider.defaultModel} (mock)`
+      content: `${friendlyName}'s response to: "${prompt}"
+
+This is a mock response from ${friendlyName}. To use the real API, configure the server-side API key or authenticate the model.\n\nError: ${error.message}`,
+      model: `${fallbackModel} (mock)`
     };
   }
 };
 
+const anthropicRequest = async ({ prompt, model, apiKey }) =>
+  performBackendRequest({
+    providerId: 'anthropic',
+    path: '/messages',
+    payload: {
+      prompt,
+      model,
+      apiKey: apiKey?.trim() || undefined,
+      maxTokens: 1024
+    },
+    prompt,
+    model
+  });
+
+const openAIRequest = async ({ prompt, model, apiKey }) =>
+  performBackendRequest({
+    providerId: 'openai',
+    path: '/chat/completions',
+    payload: {
+      prompt,
+      model,
+      apiKey: apiKey?.trim() || undefined,
+      maxTokens: 1024,
+      temperature: 0.7
+    },
+    prompt,
+    model
+  });
+
+const geminiRequest = async ({ prompt, model, apiKey }) =>
+  performBackendRequest({
+    providerId: 'gemini',
+    path: '/generate',
+    payload: {
+      prompt,
+      model,
+      apiKey: apiKey?.trim() || undefined,
+      maxOutputTokens: 1024,
+      temperature: 0.7
+    },
+    prompt,
+    model
+  });
+
 export const callAIModel = async ({ providerId, prompt, model, apiKey }) => {
-  const resolvedKey = resolveApiKey(providerId, apiKey);
+  if (!prompt || !prompt.trim()) {
+    return {
+      content: '',
+      model: model || PROVIDER_CONFIG[providerId]?.defaultModel || ''
+    };
+  }
 
   if (providerId === 'anthropic') {
-    return anthropicRequest({ prompt, model, apiKey: resolvedKey });
+    return anthropicRequest({ prompt, model, apiKey });
   }
 
   if (providerId === 'openai') {
-    return openAIRequest({ prompt, model, apiKey: resolvedKey });
+    return openAIRequest({ prompt, model, apiKey });
   }
 
   if (providerId === 'gemini') {
-    return geminiRequest({ prompt, model, apiKey: resolvedKey });
+    return geminiRequest({ prompt, model, apiKey });
   }
 
   throw new Error(`Unsupported provider: ${providerId}`);
 };
 
 export const authenticateModel = async ({ providerId, apiKey }) => {
-  const resolvedKey = resolveApiKey(providerId, apiKey);
-
-  if (!resolvedKey || resolvedKey.startsWith('missing-')) {
-    throw new Error('Missing API key. Add a key to authenticate this model.');
+  const trimmedKey = apiKey?.trim();
+  if (!providerId) {
+    throw new Error('Unknown provider.');
   }
 
-  // In the current implementation we simply validate the presence of a key.
-  // This keeps the UI responsive while avoiding unnecessary network calls.
+  if (trimmedKey) {
+    return {
+      providerId,
+      authenticatedAt: new Date().toISOString()
+    };
+  }
+
+  // Assume success when relying on server-managed keys.
   return {
     providerId,
     authenticatedAt: new Date().toISOString()
   };
 };
 
-// Legacy helpers kept for backwards compatibility (now using callAIModel under the hood)
-export const callClaudeAPI = async (prompt) => {
-  return callAIModel({ providerId: 'anthropic', prompt });
-};
+// Legacy helpers retained for backwards compatibility
+export const callClaudeAPI = async (prompt) => callAIModel({ providerId: 'anthropic', prompt });
+export const callOpenAIAPI = async (prompt) => callAIModel({ providerId: 'openai', prompt });
+export const callGeminiAPI = async (prompt) => callAIModel({ providerId: 'gemini', prompt });
 
-export const callChatGPTAPI = async (prompt) => {
-  return callAIModel({ providerId: 'openai', prompt });
-};
-
-// Environment setup instructions
-export const getSetupInstructions = () => {
-  return {
-    title: 'API Setup Instructions',
-    steps: [
-      '1. Create a .env file in your project root directory',
-      '2. Add your API keys to the .env file:',
-      '   REACT_APP_ANTHROPIC_API_KEY=your_anthropic_key_here',
-      '   REACT_APP_OPENAI_API_KEY=your_openai_key_here',
-      '   REACT_APP_GEMINI_API_KEY=your_gemini_key_here',
-      '3. Restart your development server (npm start).',
-      '4. Optionally store provider-specific keys in the model manager UI to override environment defaults.'
-    ],
-    note: 'Never commit your .env file to version control! Add .env to your .gitignore file.'
-  };
-};
+export const getSetupInstructions = () => ({
+  title: 'API Setup Instructions',
+  steps: [
+    '1. Create a .env file alongside server/index.js and add the API keys:',
+    '   ANTHROPIC_API_KEY=your_anthropic_key_here',
+    '   OPENAI_API_KEY=your_openai_key_here',
+    '   GEMINI_API_KEY=your_google_key_here',
+    '2. Optionally create a .env.local in the project root for frontend-specific settings (e.g. REACT_APP_API_BASE_URL).',
+    '3. Install backend dependencies: npm install express cors dotenv morgan',
+    '4. Start the backend with npm run server (defaults to http://localhost:3001).',
+    '5. In a separate terminal run npm start to launch the React app.'
+  ],
+  note: 'Keep API keys on the server only. Do not expose keys in client-side code or commit them to version control.'
+});

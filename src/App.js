@@ -368,7 +368,6 @@ function App() {
       providerId: 'anthropic',
       name: 'Claude Sonnet',
       model: PROVIDER_CONFIG.anthropic.defaultModel,
-      apiKey: '',
       isActive: true,
       authenticatedAt: null,
       authError: null
@@ -378,7 +377,6 @@ function App() {
       providerId: 'openai',
       name: 'ChatGPT GPT-4',
       model: PROVIDER_CONFIG.openai.defaultModel,
-      apiKey: '',
       isActive: true,
       authenticatedAt: null,
       authError: null
@@ -388,7 +386,6 @@ function App() {
       providerId: 'gemini',
       name: 'Gemini 1.5 Flash',
       model: PROVIDER_CONFIG.gemini.defaultModel,
-      apiKey: '',
       isActive: true,
       authenticatedAt: null,
       authError: null
@@ -421,6 +418,7 @@ function App() {
   const customEntryCount = customPromptCount + customCommandCount;
 
   const activeModels = useMemo(() => models.filter((model) => model.isActive), [models]);
+  const [activePanel, setActivePanel] = useState('all');
 
   const handlePromptChange = useCallback((event) => {
     setPrompt(event.target.value);
@@ -442,6 +440,7 @@ function App() {
     setLoading(true);
     setError(null);
     setModelResponses({});
+    setActivePanel('all');
 
     try {
       const results = await Promise.allSettled(
@@ -568,6 +567,12 @@ function App() {
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
   };
+
+  useEffect(() => {
+    if (activePanel !== 'all' && !activeModels.some((model) => model.id === activePanel)) {
+      setActivePanel('all');
+    }
+  }, [activePanel, activeModels]);
 
   const handleTabChange = (nextTab) => {
     setActiveTab(nextTab);
@@ -1103,6 +1108,95 @@ function App() {
     </section>
   );
 
+  const segmentOptions = useMemo(() => {
+    if (activeModels.length === 0) {
+      return [];
+    }
+
+    const options = [
+      {
+        id: 'all',
+        label: 'All',
+        sublabel: activeModels.length > 1 ? 'View all responses' : 'View response'
+      }
+    ];
+
+    activeModels.forEach((model) => {
+      const providerName = PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId;
+      options.push({
+        id: model.id,
+        label: model.name || model.model,
+        sublabel: providerName
+      });
+    });
+
+    return options;
+  }, [activeModels]);
+
+  const showSegmentedControl = segmentOptions.length > 1 && activeModels.length > 1;
+
+  const displayedModels = useMemo(() => {
+    if (activePanel === 'all') {
+      return activeModels;
+    }
+
+    return activeModels.filter((model) => model.id === activePanel);
+  }, [activeModels, activePanel]);
+
+  const handleSegmentKeyDown = (event) => {
+    if (!showSegmentedControl) {
+      return;
+    }
+
+    const currentIndex = segmentOptions.findIndex((option) => option.id === activePanel);
+    if (currentIndex === -1) {
+      return;
+    }
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      const nextOption = segmentOptions[(currentIndex + 1) % segmentOptions.length];
+      setActivePanel(nextOption.id);
+    }
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const previousIndex = (currentIndex - 1 + segmentOptions.length) % segmentOptions.length;
+      setActivePanel(segmentOptions[previousIndex].id);
+    }
+  };
+
+  const renderResponseCard = (model) => {
+    const response = modelResponses[model.id];
+    const hasResponse = Boolean(response);
+    const lines = response?.content ? response.content.split('\n') : [];
+    const providerName = PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId;
+
+    return (
+      <div key={model.id} className="response-card">
+        <h3>
+          {model.name || model.model}
+        </h3>
+        <p className="model-info">Provider: {providerName}</p>
+        {hasResponse ? (
+          <div className="response-content">
+            <p className="model-info">Model: {response.model || model.model}</p>
+            <div className="response-text">
+              {response.error ? (
+                <p className="error-text">{response.error}</p>
+              ) : (
+                lines.map((line, index) => <p key={index}>{line}</p>)
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="loading-placeholder">
+            {loading ? 'Waiting for response...' : 'Submit a prompt to see a response.'}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="App" data-theme={darkMode ? 'dark' : 'light'}>
@@ -1227,37 +1321,36 @@ function App() {
             {error && <div className="error-message">{error}</div>}
 
             {activeModels.length > 0 && (
-              <div className="responses-container">
-                {activeModels.map((model) => {
-                  const response = modelResponses[model.id];
-                  const hasResponse = Boolean(response);
-                  const lines = response?.content ? response.content.split('\n') : [];
-
-                  return (
-                    <div key={model.id} className="response-card">
-                      <h3>{model.name || model.model}</h3>
-                      <p className="model-info">
-                        Provider: {PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId}
-                      </p>
-                      {hasResponse ? (
-                        <div className="response-content">
-                          <p className="model-info">Model: {response.model || model.model}</p>
-                          <div className="response-text">
-                            {response.error ? (
-                              <p className="error-text">{response.error}</p>
-                            ) : (
-                              lines.map((line, index) => <p key={index}>{line}</p>)
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="loading-placeholder">
-                          {loading ? 'Waiting for response...' : 'Submit a prompt to see a response.'}
-                        </div>
-                      )}
+              <div className="responses-section">
+                {showSegmentedControl && (
+                  <div className="response-selector">
+                    <div
+                      className="segmented-control"
+                      role="radiogroup"
+                      aria-label="Choose which responses to display"
+                    >
+                      {segmentOptions.map((option) => (
+                        <button
+                          type="button"
+                          key={option.id}
+                          className={`segmented-option ${activePanel === option.id ? 'active' : ''}`}
+                          onClick={() => setActivePanel(option.id)}
+                          role="radio"
+                          aria-checked={activePanel === option.id}
+                          tabIndex={activePanel === option.id ? 0 : -1}
+                          onKeyDown={handleSegmentKeyDown}
+                        >
+                          <span className="option-title">{option.label}</span>
+                          <span className="option-subtitle">{option.sublabel}</span>
+                        </button>
+                      ))}
                     </div>
-                  );
-                })}
+                  </div>
+                )}
+
+                <div className={`responses-container ${activePanel !== 'all' ? 'single' : ''}`}>
+                  {displayedModels.map((model) => renderResponseCard(model))}
+                </div>
               </div>
             )}
           </div>
