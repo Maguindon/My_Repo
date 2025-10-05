@@ -17,7 +17,7 @@ export const PROVIDER_CONFIG = {
   gemini: {
     id: 'gemini',
     displayName: 'Google Gemini',
-    defaultModel: 'gemini-1.5-flash'
+    defaultModel: 'gemini-2.5-flash'
   }
 };
 
@@ -123,7 +123,7 @@ const geminiRequest = async ({ prompt, model, apiKey }) =>
       prompt,
       model,
       apiKey: apiKey?.trim() || undefined,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 2048,
       temperature: 0.7
     },
     prompt,

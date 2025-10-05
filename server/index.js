@@ -321,7 +321,7 @@ app.post('/api/openai/chat/completions', async (req, res) => {
 
 app.post('/api/gemini/generate', async (req, res) => {
   try {
-    const { prompt, model, apiKey, maxOutputTokens = 1024, temperature = 0.7 } = req.body;
+    const { prompt, model, apiKey, maxOutputTokens = 2048, temperature = 0.7 } = req.body;
 
     if (!prompt || typeof prompt !== 'string') {
       return res.status(400).json({ error: 'Prompt is required.' });
@@ -361,11 +361,68 @@ app.post('/api/gemini/generate', async (req, res) => {
     }
 
     const data = await response.json();
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const content = parts
-      .map((part) => part?.text)
-      .filter(Boolean)
-      .join('\n');
+    const [primaryCandidate] = data.candidates || [];
+    const parts = primaryCandidate?.content?.parts || [];
+    const textFragments = parts
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+
+        return '';
+      })
+      .map((fragment) => fragment.trim())
+      .filter(Boolean);
+
+    let content = textFragments.join('\n');
+    const finishReason = primaryCandidate?.finishReason;
+
+    if (content && finishReason === 'MAX_OUTPUT_TOKENS') {
+      content = `${content}\n\n(Gemini stopped early after hitting the max output token limit of ${
+        maxOutputTokens || 'the current'
+      } tokens. Increase the limit if you need a longer reply.)`;
+    }
+
+    if (!content) {
+      const blockReason = data.promptFeedback?.blockReason;
+      const safetyRatings =
+        primaryCandidate?.safetyRatings || data.promptFeedback?.safetyRatings || [];
+      const blockedCategories = safetyRatings
+        .filter((rating) => rating?.blocked)
+        .map((rating) => rating.category)
+        .filter(Boolean);
+
+      if (blockReason || (finishReason && finishReason !== 'STOP') || blockedCategories.length) {
+        const reasonParts = [];
+        if (finishReason && finishReason !== 'STOP') {
+          reasonParts.push(`finish reason: ${finishReason}`);
+        }
+        if (blockReason) {
+          reasonParts.push(`block reason: ${blockReason}`);
+        }
+        if (blockedCategories.length > 0) {
+          reasonParts.push(`safety categories: ${blockedCategories.join(', ')}`);
+        }
+
+        content = `Gemini did not return any text for this prompt (${
+          reasonParts.join('; ') || 'no details provided'
+        }). Try rephrasing or adjusting the request.`;
+      }
+
+      if (!content && finishReason === 'MAX_OUTPUT_TOKENS') {
+        content = `Gemini reached the max output token limit of ${
+          maxOutputTokens || 'the current'
+        } tokens without returning text. Try increasing the limit or simplifying the prompt.`;
+      }
+
+      if (!content) {
+        content = 'Gemini did not return any text. Check the server logs for the raw response.';
+      }
+    }
 
     return res.json({
       content,

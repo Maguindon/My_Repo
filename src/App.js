@@ -29,6 +29,12 @@ const createChecklistItem = (label, satisfied, tip) => ({
   tip
 });
 
+const formatConversationForPrompt = (conversation = []) =>
+  conversation
+    .filter((message) => message?.text)
+    .map((message) => `${message.sender === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
+    .join('\n\n');
+
 const buildPromptOptimization = (promptText) => {
   const trimmed = promptText.trim();
   if (!trimmed) {
@@ -348,6 +354,10 @@ const loadLibraryFromStorage = () => {
 function App() {
   const [prompt, setPrompt] = useState('');
   const [modelResponses, setModelResponses] = useState({});
+  const [modelConversations, setModelConversations] = useState({});
+  const [replyStates, setReplyStates] = useState({});
+  const [replyLoading, setReplyLoading] = useState({});
+  const [copyStatuses, setCopyStatuses] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [darkMode, setDarkMode] = useState(() => {
@@ -384,7 +394,7 @@ function App() {
     {
       id: 'gemini-default',
       providerId: 'gemini',
-      name: 'Gemini 1.5 Flash',
+      name: 'Gemini 2.5 Flash',
       model: PROVIDER_CONFIG.gemini.defaultModel,
       isActive: true,
       authenticatedAt: null,
@@ -441,6 +451,16 @@ function App() {
     setError(null);
     setModelResponses({});
     setActivePanel('all');
+    setReplyStates({});
+    setReplyLoading({});
+    setCopyStatuses({});
+
+    setModelConversations(
+      activeModels.reduce((acc, model) => {
+        acc[model.id] = [{ sender: 'user', text: prompt }];
+        return acc;
+      }, {})
+    );
 
     try {
       const results = await Promise.allSettled(
@@ -470,6 +490,20 @@ function App() {
       });
 
       setModelResponses(nextResponses);
+      setModelConversations((prev) => {
+        const next = { ...prev };
+        activeModels.forEach((model, index) => {
+          const result = results[index];
+          if (result.status === 'fulfilled' && result.value?.content) {
+            const existingConversation = next[model.id] || [];
+            next[model.id] = [
+              ...existingConversation,
+              { sender: 'assistant', text: result.value.content }
+            ];
+          }
+        });
+        return next;
+      });
     } catch (err) {
       setError('An error occurred while fetching responses.');
       console.error('Error:', err);
@@ -486,6 +520,7 @@ function App() {
   const [optimizerCopyStatus, setOptimizerCopyStatus] = useState(null);
   const copyStatusTimeoutRef = useRef(null);
   const libraryCopyTimeoutRef = useRef(null);
+  const responseCopyTimeoutRef = useRef({});
   const isOptimizeDisabled = !optimizerPrompt.trim();
 
 
@@ -497,6 +532,13 @@ function App() {
       if (libraryCopyTimeoutRef.current) {
         clearTimeout(libraryCopyTimeoutRef.current);
       }
+      const timeouts = responseCopyTimeoutRef.current || {};
+      Object.values(timeouts).forEach((timeoutId) => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      });
+      responseCopyTimeoutRef.current = {};
     };
   }, []);
 
@@ -1166,11 +1208,177 @@ function App() {
     }
   };
 
+  const handleReplyToggle = (modelId) => {
+    setReplyStates((prev) => {
+      const current = prev[modelId] || { isOpen: false, value: '' };
+      const nextIsOpen = !current.isOpen;
+      return {
+        ...prev,
+        [modelId]: nextIsOpen ? { ...current, isOpen: true } : { isOpen: false, value: '' }
+      };
+    });
+  };
+
+  const handleReplyChange = (modelId, value) => {
+    setReplyStates((prev) => ({
+      ...prev,
+      [modelId]: {
+        ...(prev[modelId] || { isOpen: true }),
+        isOpen: true,
+        value
+      }
+    }));
+  };
+
+  const handleReplySubmit = async (event, model) => {
+    event.preventDefault();
+
+    const state = replyStates[model.id] || {};
+    const trimmedMessage = state.value?.trim();
+    if (!trimmedMessage) {
+      return;
+    }
+
+    const existingConversation = modelConversations[model.id] || [];
+    const conversationWithUser = [...existingConversation, { sender: 'user', text: trimmedMessage }];
+    const promptPayload = formatConversationForPrompt(conversationWithUser);
+
+    setReplyLoading((prev) => ({ ...prev, [model.id]: true }));
+    setModelConversations((prev) => ({
+      ...prev,
+      [model.id]: conversationWithUser
+    }));
+
+    try {
+      const response = await callAIModel({
+        providerId: model.providerId,
+        prompt: promptPayload,
+        model: model.model,
+        apiKey: model.apiKey
+      });
+
+      setModelResponses((prev) => ({
+        ...prev,
+        [model.id]: response
+      }));
+
+      if (response?.content) {
+        setModelConversations((prev) => {
+          const currentConversation = prev[model.id] || conversationWithUser;
+          return {
+            ...prev,
+            [model.id]: [...currentConversation, { sender: 'assistant', text: response.content }]
+          };
+        });
+      }
+
+      if (responseCopyTimeoutRef.current[model.id]) {
+        clearTimeout(responseCopyTimeoutRef.current[model.id]);
+        delete responseCopyTimeoutRef.current[model.id];
+      }
+
+      setReplyStates((prev) => ({
+        ...prev,
+        [model.id]: { isOpen: true, value: '' }
+      }));
+
+      setCopyStatuses((prev) => {
+        const next = { ...prev };
+        delete next[model.id];
+        return next;
+      });
+    } catch (err) {
+      const message = err?.message || 'Failed to get a response.';
+      setModelResponses((prev) => ({
+        ...prev,
+        [model.id]: {
+          error: message,
+          model: model.model
+        }
+      }));
+    } finally {
+      setReplyLoading((prev) => ({
+        ...prev,
+        [model.id]: false
+      }));
+    }
+  };
+
+  const handleCopyResponse = async (modelId) => {
+    const conversation = modelConversations[modelId] || [];
+    const assistantMessages = conversation
+      .filter((message) => message.sender === 'assistant' && message.text)
+      .map((message) => message.text.trim())
+      .filter(Boolean);
+
+    if (assistantMessages.length === 0) {
+      return;
+    }
+
+    const textToCopy = assistantMessages.join('\n\n');
+
+    const copyWithFallback = async (text) => {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      if (typeof document === 'undefined') {
+        throw new Error('Clipboard not supported in this environment');
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    };
+
+    try {
+      await copyWithFallback(textToCopy);
+      setCopyStatuses((prev) => ({
+        ...prev,
+        [modelId]: 'Copied!'
+      }));
+    } catch (error) {
+      setCopyStatuses((prev) => ({
+        ...prev,
+        [modelId]: 'Copy failed'
+      }));
+    }
+
+    if (responseCopyTimeoutRef.current[modelId]) {
+      clearTimeout(responseCopyTimeoutRef.current[modelId]);
+    }
+
+    responseCopyTimeoutRef.current[modelId] = setTimeout(() => {
+      setCopyStatuses((prev) => {
+        const next = { ...prev };
+        delete next[modelId];
+        return next;
+      });
+      delete responseCopyTimeoutRef.current[modelId];
+    }, 2400);
+  };
+
   const renderResponseCard = (model) => {
     const response = modelResponses[model.id];
-    const hasResponse = Boolean(response);
-    const lines = response?.content ? response.content.split('\n') : [];
+    const conversation = modelConversations[model.id] || [];
     const providerName = PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId;
+    const replyState = replyStates[model.id] || { isOpen: false, value: '' };
+    const isReplyInFlight = Boolean(replyLoading[model.id]);
+    const assistantMessages = conversation.filter((message) => message.sender === 'assistant');
+    const hasAssistantMessages = assistantMessages.length > 0;
+    const copyStatus = copyStatuses[model.id];
+    const hasError = Boolean(response?.error);
+    const hasConversation = conversation.length > 0;
+    const showInitialPlaceholder = !hasConversation && !hasError;
+    const isInitialLoading = loading && !response;
+    const canReply = hasAssistantMessages && !loading && !isReplyInFlight && !hasError;
 
     return (
       <div key={model.id} className="response-card">
@@ -1178,21 +1386,108 @@ function App() {
           {model.name || model.model}
         </h3>
         <p className="model-info">Provider: {providerName}</p>
-        {hasResponse ? (
-          <div className="response-content">
-            <p className="model-info">Model: {response.model || model.model}</p>
-            <div className="response-text">
-              {response.error ? (
-                <p className="error-text">{response.error}</p>
-              ) : (
-                lines.map((line, index) => <p key={index}>{line}</p>)
-              )}
+        <div className="response-content">
+          {(hasConversation || hasError) && !showInitialPlaceholder && (
+            <p className="model-info">Model: {response?.model || model.model}</p>
+          )}
+          <div className="response-text">
+            {hasError ? (
+              <p className="error-text">{response.error}</p>
+            ) : hasConversation ? (
+              <div className="response-conversation">
+                {conversation.map((message, index) => {
+                  const paragraphs = String(message.text || '')
+                    .split('\n')
+                    .filter((line) => line.trim().length > 0);
+                  return (
+                    <div
+                      key={`${model.id}-message-${index}`}
+                      className={`response-message response-message--${message.sender}`}
+                    >
+                      <span className="response-message__label">
+                        {message.sender === 'user' ? 'You' : model.name || 'AI'}
+                      </span>
+                      <div className="response-message__body">
+                        {paragraphs.length > 0 ? (
+                          paragraphs.map((paragraph, paragraphIndex) => (
+                            <p key={`${model.id}-message-${index}-p-${paragraphIndex}`}>{paragraph}</p>
+                          ))
+                        ) : (
+                          <p>(No content)</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(loading && !response?.content && !response?.error) && (
+                  <div className="response-message response-message--assistant">
+                    <span className="response-message__label">{model.name || 'AI'}</span>
+                    <div className="response-message__body">
+                      <p>Generating response...</p>
+                    </div>
+                  </div>
+                )}
+                {isReplyInFlight && (
+                  <div className="response-message response-message--assistant">
+                    <span className="response-message__label">{model.name || 'AI'}</span>
+                    <div className="response-message__body">
+                      <p>Thinking through your follow-up...</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="loading-placeholder">
+                {isInitialLoading ? 'Waiting for response...' : 'Submit a prompt to see a response.'}
+              </div>
+            )}
+          </div>
+        </div>
+        {hasAssistantMessages && (
+          <div className="response-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => handleReplyToggle(model.id)}
+              disabled={!canReply}
+            >
+              {replyState.isOpen ? 'Close Reply' : 'Reply'}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => handleCopyResponse(model.id)}
+              disabled={!hasAssistantMessages}
+            >
+              {copyStatus || 'Copy'}
+            </button>
+          </div>
+        )}
+        {replyState.isOpen && (
+          <form className="reply-form" onSubmit={(event) => handleReplySubmit(event, model)}>
+            <label htmlFor={`reply-${model.id}`}>Follow-up message</label>
+            <textarea
+              id={`reply-${model.id}`}
+              value={replyState.value || ''}
+              onChange={(event) => handleReplyChange(model.id, event.target.value)}
+              rows={3}
+              placeholder="Ask a follow-up or provide more detail..."
+              disabled={isReplyInFlight}
+            />
+            <div className="reply-actions">
+              <button type="submit" disabled={isReplyInFlight || !(replyState.value || '').trim()}>
+                {isReplyInFlight ? 'Sending...' : 'Send Reply'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => handleReplyToggle(model.id)}
+                disabled={isReplyInFlight}
+              >
+                Cancel
+              </button>
             </div>
-          </div>
-        ) : (
-          <div className="loading-placeholder">
-            {loading ? 'Waiting for response...' : 'Submit a prompt to see a response.'}
-          </div>
+          </form>
         )}
       </div>
     );

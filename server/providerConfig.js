@@ -18,7 +18,7 @@ const PROVIDER_CONFIG = {
     id: 'gemini',
     displayName: 'Google Gemini',
     apiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModel: 'gemini-1.5-flash',
+    defaultModel: 'gemini-2.5-flash',
     environmentKey: 'GEMINI_API_KEY'
   }
 };
