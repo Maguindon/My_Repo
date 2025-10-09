@@ -9,13 +9,14 @@ beforeEach(() => {
 test('shows AI comparison tools collapsed by default', () => {
   render(<App />);
 
-  const toggleButton = screen.getByRole('button', { name: /Manage Models/i });
+  const toggleButton = screen.getByRole('button', { name: /model manager/i });
   expect(toggleButton).toBeInTheDocument();
+  expect(toggleButton).toHaveAttribute('aria-label', expect.stringMatching(/show model manager/i));
   expect(screen.queryByText(/Model Manager/i)).not.toBeInTheDocument();
 
   fireEvent.click(toggleButton);
   expect(screen.getByRole('heading', { name: /Model Manager/i })).toBeInTheDocument();
-  expect(toggleButton).toHaveTextContent(/Hide Model Manager/i);
+  expect(toggleButton).toHaveAttribute('aria-label', expect.stringMatching(/hide model manager/i));
 });
 
 test('allows typing a full prompt in the comparison textarea', async () => {
@@ -36,7 +37,7 @@ test('allows typing a full prompt in the comparison textarea', async () => {
 test('optimizes a prompt when using the prompt optimizer tab', async () => {
   render(<App />);
 
-  const optimizerTab = screen.getByRole('button', { name: /Prompt Optimizer/i });
+  const optimizerTab = screen.getByRole('link', { name: /Optimize/i });
   fireEvent.click(optimizerTab);
 
   const promptInput = screen.getByLabelText(/paste or type your prompt/i);
@@ -71,7 +72,7 @@ test('optimizes a prompt when using the prompt optimizer tab', async () => {
 test('displays default git commands in the prompt library', () => {
   render(<App />);
 
-  fireEvent.click(screen.getByRole('button', { name: /Prompt Library/i }));
+  fireEvent.click(screen.getByRole('link', { name: /Library/i }));
 
   expect(screen.getByRole('heading', { level: 3, name: /Git Commands/i })).toBeInTheDocument();
   expect(screen.getByText('git pull origin main')).toBeInTheDocument();
@@ -83,7 +84,7 @@ test('displays default git commands in the prompt library', () => {
 test('allows adding and removing a custom prompt in the library', async () => {
   render(<App />);
 
-  fireEvent.click(screen.getByRole('button', { name: /Prompt Library/i }));
+  fireEvent.click(screen.getByRole('link', { name: /Library/i }));
 
   const promptsSection = screen.getByRole('heading', { level: 3, name: /Saved Prompts/i }).closest('section');
   expect(promptsSection).not.toBeNull();

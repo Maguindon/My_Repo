@@ -164,6 +164,200 @@ const buildPromptOptimization = (promptText) => {
   };
 };
 
+const buildAiOptimizationPromptPayload = (originalPrompt, optimization) => {
+  const strengths = optimization?.strengths || [];
+  const suggestions = optimization?.suggestions || [];
+  const checklist = optimization?.checklist || [];
+  const metrics = optimization?.metrics || {};
+  const followUpQuestions = optimization?.followUpQuestions || [];
+
+  const strengthsBlock = strengths.length
+    ? strengths.map((item, index) => `${index + 1}. ${item}`).join('\n')
+    : 'None noted.';
+  const suggestionsBlock = suggestions.length
+    ? suggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
+    : 'No immediate gaps detected.';
+  const checklistBlock = checklist
+    .map((item) => `- ${item.label}: ${item.status === 'complete' ? 'complete' : `missing (${item.tip})`}`)
+    .join('\n');
+  const metricsBlock = `Word count: ${metrics.wordCount ?? 'n/a'} | Sentences: ${metrics.sentenceCount ?? 'n/a'} | Avg sentence length: ${metrics.averageSentenceLength ?? 'n/a'} | Estimated reading time: ${metrics.estimatedReadingTime ?? 'n/a'} min`;
+  const followUpsBlock = followUpQuestions.length
+    ? followUpQuestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
+    : 'None provided.';
+
+  return `You are an expert prompt engineer. Rewrite the user's prompt so it is direct, unambiguous, and ready for an advanced AI assistant.
+
+Use the analysis below to guide improvements while preserving the user's intent.
+
+Original prompt:
+"""
+${originalPrompt.trim()}
+"""
+
+Strengths already present:
+${strengthsBlock}
+
+Gaps or enhancements to address:
+${suggestionsBlock}
+
+Checklist summary:
+${checklistBlock}
+
+Prompt metrics: ${metricsBlock}
+
+Suggested clarifying questions to consider:
+${followUpsBlock}
+
+Return a concise markdown response with:
+1. A section titled "Improved Prompt" that contains the rewritten prompt only.
+2. A brief "Why it works" section listing the most important changes you made (bullet points, maximum 3 bullets).
+3. If the analysis still has open questions, include a final section titled "Questions to clarify" listing them; otherwise state "None".
+Keep the improved prompt self-contained and actionable.`;
+};
+
+const extractImprovedPromptSection = (content = '') => {
+  if (!content) {
+    return '';
+  }
+
+  const normalized = content.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+
+  const headingPattern = /^(?:[-*+]\s+)?(?:#{1,6}\s*)?(?:\*\*|__)?\s*Improved Prompt(?:\s*(?:\*\*|__))?\s*(?::|[-–])?\s*(.*)$/i;
+  const stopPattern = /^(?:[-*+]\s+)?(?:#{1,6}\s*)?(?:\*\*|__)?\s*(Why it works|Questions to clarify)\b/i;
+
+  let capturing = false;
+  let inCodeBlock = false;
+  const captured = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!capturing) {
+      const headingMatch = trimmed.match(headingPattern);
+      if (headingMatch) {
+        capturing = true;
+        const trailing = headingMatch[1]?.trim();
+        if (trailing) {
+          captured.push(trailing);
+        }
+      }
+      continue;
+    }
+
+    if (/^```/.test(trimmed)) {
+      inCodeBlock = !inCodeBlock;
+      captured.push(line.replace(/\s+$/, ''));
+      continue;
+    }
+
+    if (!inCodeBlock && stopPattern.test(trimmed)) {
+      break;
+    }
+
+    captured.push(line.replace(/\s+$/, ''));
+  }
+
+  const result = captured.join('\n').trim();
+  return result || normalized.trim();
+};
+
+const buildSuperPromptFromResponses = ({ originalPrompt, responses }) => {
+  if (!Array.isArray(responses) || responses.length === 0) {
+    return null;
+  }
+
+  const improvedPrompts = responses
+    .map((response) => extractImprovedPromptSection(response?.content || ''))
+    .map((text) => text.trim())
+    .filter(Boolean);
+
+  if (improvedPrompts.length === 0) {
+    return null;
+  }
+
+  const combinedLines = [];
+  const seen = new Set();
+  let previousBlank = false;
+
+  improvedPrompts.forEach((prompt) => {
+    const promptLines = prompt.replace(/\r\n/g, '\n').split('\n');
+
+    promptLines.forEach((line) => {
+      const withoutTrailing = line.replace(/\s+$/, '');
+      const trimmed = withoutTrailing.trim();
+
+      if (!trimmed) {
+        if (!previousBlank && combinedLines.length > 0) {
+          combinedLines.push('');
+          previousBlank = true;
+        }
+        return;
+      }
+
+      const normalized = trimmed.replace(/\s+/g, ' ').toLowerCase();
+      if (seen.has(normalized)) {
+        previousBlank = false;
+        return;
+      }
+
+      combinedLines.push(trimmed);
+      seen.add(normalized);
+      previousBlank = false;
+    });
+
+    if (combinedLines.length > 0 && combinedLines[combinedLines.length - 1] !== '') {
+      combinedLines.push('');
+      previousBlank = true;
+    }
+  });
+
+  while (combinedLines.length > 0 && combinedLines[combinedLines.length - 1] === '') {
+    combinedLines.pop();
+  }
+
+  const sections = [];
+  const trimmedOriginal = originalPrompt?.trim();
+
+  if (trimmedOriginal) {
+    sections.push('### Original Request', trimmedOriginal, '');
+  }
+
+  if (combinedLines.length > 0) {
+    sections.push('### Combined Directives', ...combinedLines);
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+
+  const output = [];
+  let lastBlank = false;
+
+  sections.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (!lastBlank && output.length > 0) {
+        output.push('');
+        lastBlank = true;
+      }
+      return;
+    }
+
+    output.push(trimmed);
+    lastBlank = false;
+  });
+
+  while (output.length > 0 && output[output.length - 1] === '') {
+    output.pop();
+  }
+
+  return {
+    superPrompt: output.join('\n'),
+    sourcesUsed: improvedPrompts.length
+  };
+};
+
 const LIBRARY_STORAGE_KEY = 'better-ai-prompt-library';
 
 const DEFAULT_PROMPT_LIBRARY = [
@@ -518,10 +712,13 @@ function App() {
   const [optimizerResult, setOptimizerResult] = useState(null);
   const [optimizerTouched, setOptimizerTouched] = useState(false);
   const [optimizerCopyStatus, setOptimizerCopyStatus] = useState(null);
+  const [optimizerAIResponses, setOptimizerAIResponses] = useState({});
+  const [optimizerLoading, setOptimizerLoading] = useState(false);
+  const [optimizerError, setOptimizerError] = useState(null);
   const copyStatusTimeoutRef = useRef(null);
   const libraryCopyTimeoutRef = useRef(null);
   const responseCopyTimeoutRef = useRef({});
-  const isOptimizeDisabled = !optimizerPrompt.trim();
+  const isOptimizeDisabled = !optimizerPrompt.trim() || optimizerLoading;
 
 
   useEffect(() => {
@@ -630,44 +827,119 @@ function App() {
 
   };
 
-  const renderSectionToolButtons = () => {
-    if (activeTab === 'ai-comparison') {
-      const activeCount = activeModels.length;
-      const totalCount = models.length;
-      const buttonLabel = isComparisonToolsOpen
-        ? 'Hide Model Manager'
-        : totalCount > 0
-        ? `Manage Models (${activeCount}/${totalCount} active)`
-        : 'Manage Models (add one)';
-
-      return (
-        <button
-          type="button"
-          className="section-tools__button"
-          onClick={() => setIsComparisonToolsOpen((prev) => !prev)}
-        >
-          {buttonLabel}
-        </button>
-      );
-    }
-
-    return (
-      <button type="button" className="section-tools__button" disabled>
-        Tools coming soon
-      </button>
-    );
+  const handleTabLinkClick = (event, nextTab) => {
+    event.preventDefault();
+    handleTabChange(nextTab);
   };
 
-  const handleOptimizePrompt = (event) => {
+  const handleOptimizePrompt = async (event) => {
     event.preventDefault();
     setOptimizerTouched(true);
 
-    if (!optimizerPrompt.trim()) {
+    const trimmedPrompt = optimizerPrompt.trim();
+    if (!trimmedPrompt) {
       return;
     }
 
-    const optimization = buildPromptOptimization(optimizerPrompt);
-    setOptimizerResult(optimization);
+    const optimization = buildPromptOptimization(trimmedPrompt);
+    if (optimization) {
+      setOptimizerResult({ ...optimization, superPromptSourceCount: 0 });
+    } else {
+      setOptimizerResult(null);
+    }
+    setOptimizerAIResponses({});
+    setOptimizerError(null);
+
+    if (!optimization) {
+      return;
+    }
+
+    if (activeModels.length === 0) {
+      setOptimizerError('Activate at least one model in Compare to request AI rewrites.');
+      return;
+    }
+
+    const aiPrompt = buildAiOptimizationPromptPayload(trimmedPrompt, optimization);
+    setOptimizerLoading(true);
+
+    try {
+      const results = await Promise.allSettled(
+        activeModels.map((model) =>
+          callAIModel({
+            providerId: model.providerId,
+            prompt: aiPrompt,
+            model: model.model,
+            apiKey: model.apiKey
+          })
+        )
+      );
+
+      const nextResponses = {};
+
+      results.forEach((result, index) => {
+        const model = activeModels[index];
+        if (!model) {
+          return;
+        }
+
+        if (result.status === 'fulfilled') {
+          nextResponses[model.id] = {
+            id: model.id,
+            name: model.name || model.model,
+            providerId: model.providerId,
+            providerName: PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId,
+            model: result.value?.model || model.model,
+            content: result.value?.content || ''
+          };
+        } else {
+          const message = result.reason?.message || 'Failed to get a response.';
+          nextResponses[model.id] = {
+            id: model.id,
+            name: model.name || model.model,
+            providerId: model.providerId,
+            providerName: PROVIDER_CONFIG[model.providerId]?.displayName || model.providerId,
+            model: model.model,
+            error: message
+          };
+        }
+      });
+
+      setOptimizerAIResponses(nextResponses);
+
+      const responsesWithContent = Object.values(nextResponses).filter((response) =>
+        Boolean(response?.content && response.content.trim())
+      );
+
+      const superPromptResult = buildSuperPromptFromResponses({
+        originalPrompt: trimmedPrompt,
+        responses: responsesWithContent
+      });
+
+      if (superPromptResult?.superPrompt) {
+        setOptimizerResult((prev) => {
+          const baseResult =
+            prev || {
+              optimizedPrompt: superPromptResult.superPrompt,
+              strengths: [],
+              suggestions: [],
+              checklist: [],
+              metrics: {},
+              followUpQuestions: []
+            };
+
+          return {
+            ...baseResult,
+            optimizedPrompt: superPromptResult.superPrompt,
+            superPromptSourceCount: superPromptResult.sourcesUsed || 0
+          };
+        });
+      }
+    } catch (err) {
+      console.error('Optimizer AI call failed:', err);
+      setOptimizerError('Unable to generate optimized prompts from the selected models.');
+    } finally {
+      setOptimizerLoading(false);
+    }
   };
 
   const handleOptimizerInputChange = (event) => {
@@ -682,6 +954,14 @@ function App() {
       setOptimizerCopyStatus(null);
     }
 
+    if (optimizerError) {
+      setOptimizerError(null);
+    }
+
+    if (Object.keys(optimizerAIResponses).length > 0) {
+      setOptimizerAIResponses({});
+    }
+
     if (optimizerTouched) {
       setOptimizerTouched(false);
     }
@@ -692,6 +972,9 @@ function App() {
     setOptimizerResult(null);
     setOptimizerTouched(false);
     setOptimizerCopyStatus(null);
+    setOptimizerAIResponses({});
+    setOptimizerError(null);
+    setOptimizerLoading(false);
   };
 
   const handleCopyOptimizedPrompt = async () => {
@@ -862,19 +1145,6 @@ function App() {
     setCommandDraft({ ...EMPTY_COMMAND_DRAFT });
     setCommandDraftError(null);
   };
-
-  const headerSubtitle = useMemo(() => {
-    switch (activeTab) {
-      case 'prompt-optimizer':
-        return 'Turn rough ideas into clear, AI-ready prompts.';
-      case 'prompt-library':
-        return 'Save AI prompts and Git commands for quick reuse.';
-      case 'email-digest':
-        return 'Email analytics and digest workflows, coming soon.';
-      default:
-        return 'Compare AI providers side-by-side to find the best response.';
-    }
-  }, [activeTab]);
 
   const handleModelFieldChange = (id, field, value) => {
     setModels((prev) =>
@@ -1497,105 +1767,132 @@ function App() {
     <div className="App" data-theme={darkMode ? 'dark' : 'light'}>
       <header className="App-header">
         <div className="header-content">
-          <h1>Better. AI</h1>
-          <p>{headerSubtitle}</p>
-          
-          {/* Tab Navigation */}
-          <div className="tab-navigation">
-            <button
-              className={`tab-button ${activeTab === 'ai-comparison' ? 'active' : ''}`}
-              onClick={() => handleTabChange('ai-comparison')}
-            >
-              🤖 AI Comparison
-            </button>
-            <button
-              className={`tab-button ${activeTab === 'prompt-optimizer' ? 'active' : ''}`}
-              onClick={() => handleTabChange('prompt-optimizer')}
-            >
-              🧠 Prompt Optimizer
-            </button>
-            <button
-              className={`tab-button ${activeTab === 'prompt-library' ? 'active' : ''}`}
-              onClick={() => handleTabChange('prompt-library')}
-            >
-              📚 Prompt Library
-            </button>
-            <button
-              className={`tab-button ${activeTab === 'email-digest' ? 'active' : ''}`}
-              onClick={() => handleTabChange('email-digest')}
-            >
-              📧 Email Digest
-            </button>
-          </div>
-
-          <div className="header-toolbar">
-            <div className="section-tools">{renderSectionToolButtons()}</div>
+          <div className="header-bar">
+            <div className="brand" aria-label="Better. AI home">
+              <span className="brand-logo" aria-hidden="true">◎</span>
+              <h1 className="brand-name">Better. AI</h1>
+            </div>
+            <nav className="tab-navigation" aria-label="Primary navigation">
+              <a
+                href="#ai-comparison"
+                className={`tab-link ${activeTab === 'ai-comparison' ? 'active' : ''}`}
+                onClick={(event) => handleTabLinkClick(event, 'ai-comparison')}
+                aria-current={activeTab === 'ai-comparison' ? 'page' : undefined}
+              >
+                <span className="tab-link__label">Compare</span>
+              </a>
+              <a
+                href="#prompt-optimizer"
+                className={`tab-link ${activeTab === 'prompt-optimizer' ? 'active' : ''}`}
+                onClick={(event) => handleTabLinkClick(event, 'prompt-optimizer')}
+                aria-current={activeTab === 'prompt-optimizer' ? 'page' : undefined}
+              >
+                <span className="tab-link__label">Optimize</span>
+              </a>
+              <a
+                href="#prompt-library"
+                className={`tab-link ${activeTab === 'prompt-library' ? 'active' : ''}`}
+                onClick={(event) => handleTabLinkClick(event, 'prompt-library')}
+                aria-current={activeTab === 'prompt-library' ? 'page' : undefined}
+              >
+                <span className="tab-link__label">Library</span>
+              </a>
+              <a
+                href="#email-digest"
+                className={`tab-link ${activeTab === 'email-digest' ? 'active' : ''}`}
+                onClick={(event) => handleTabLinkClick(event, 'email-digest')}
+                aria-current={activeTab === 'email-digest' ? 'page' : undefined}
+              >
+                <span className="tab-link__label">Digest</span>
+              </a>
+            </nav>
             <div className="header-buttons">
               <button
-                className="dark-mode-button"
+                type="button"
+                className={`icon-button setup-toggle ${showSetupInstructions ? 'active' : ''}`}
+                onClick={() => setShowSetupInstructions(!showSetupInstructions)}
+                aria-label={`${showSetupInstructions ? 'Hide' : 'Show'} API setup instructions`}
+                title={showSetupInstructions ? 'Hide API setup instructions' : 'Show API setup instructions'}
+              >
+                <span aria-hidden="true">🛠️</span>
+                <span className="visually-hidden">
+                  {showSetupInstructions ? 'Hide API Setup Instructions' : 'Show API Setup Instructions'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`icon-button manage-models-button ${isComparisonToolsOpen ? 'active' : ''}`}
+                onClick={() => setIsComparisonToolsOpen((prev) => !prev)}
+                aria-label={`${isComparisonToolsOpen ? 'Hide' : 'Show'} model manager`}
+                aria-pressed={isComparisonToolsOpen}
+                title={isComparisonToolsOpen ? 'Hide model manager' : 'Show model manager'}
+              >
+                <span aria-hidden="true">🧩</span>
+                <span className="visually-hidden">
+                  {isComparisonToolsOpen ? 'Hide Model Manager' : 'Show Model Manager'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="icon-button dark-mode-button"
                 onClick={toggleDarkMode}
                 title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
               >
-                {darkMode ? '☀️' : '🌙'}
+                <span aria-hidden="true">{darkMode ? '☀️' : '🌙'}</span>
+                <span className="visually-hidden">Toggle dark mode</span>
               </button>
-              {activeTab === 'ai-comparison' && (
-                <button
-                  className="setup-button"
-                  onClick={() => setShowSetupInstructions(!showSetupInstructions)}
-                >
-                  {showSetupInstructions ? 'Hide' : 'Show'} API Setup Instructions
-                </button>
-              )}
             </div>
           </div>
+
         </div>
       </header>
       
       <main className="App-main">
+        {showSetupInstructions && (
+          <div className="setup-instructions">
+            <h3>{getSetupInstructions().title}</h3>
+            <ol>
+              {getSetupInstructions().steps.map((step, index) => (
+                <li key={index}>{step}</li>
+              ))}
+            </ol>
+            <p className="setup-note">{getSetupInstructions().note}</p>
+          </div>
+        )}
+
+        {isComparisonToolsOpen && (
+          <section className="comparison-tools">
+            <div className="comparison-tools__header">
+              <h2>Model Manager</h2>
+              <p>Configure which AI accounts and models to compare side-by-side.</p>
+            </div>
+
+            <div className="comparison-tools__summary">
+              <div>
+                <span className="summary-value">{activeModels.length}</span>
+                <span className="summary-label">Active models</span>
+              </div>
+              <div>
+                <span className="summary-value">{totalModels}</span>
+                <span className="summary-label">Total configured</span>
+              </div>
+              <div>
+                <span className="summary-value">{inactiveModels}</span>
+                <span className="summary-label">Inactive</span>
+              </div>
+            </div>
+
+            {managerMessage && <div className="comparison-tools__message">{managerMessage}</div>}
+
+            <div className="comparison-tools__content">
+              <ModelManager />
+            </div>
+          </section>
+        )}
+
         {activeTab === 'ai-comparison' && (
           <div className="tab-content">
-            {showSetupInstructions && (
-              <div className="setup-instructions">
-                <h3>{getSetupInstructions().title}</h3>
-                <ol>
-                  {getSetupInstructions().steps.map((step, index) => (
-                    <li key={index}>{step}</li>
-                  ))}
-                </ol>
-                <p className="setup-note">{getSetupInstructions().note}</p>
-              </div>
-            )}
-
-            {isComparisonToolsOpen && (
-              <section className="comparison-tools">
-                <div className="comparison-tools__header">
-                  <h2>Model Manager</h2>
-                  <p>Configure which AI accounts and models to compare side-by-side.</p>
-                </div>
-
-                <div className="comparison-tools__summary">
-                  <div>
-                    <span className="summary-value">{activeModels.length}</span>
-                    <span className="summary-label">Active models</span>
-                  </div>
-                  <div>
-                    <span className="summary-value">{totalModels}</span>
-                    <span className="summary-label">Total configured</span>
-                  </div>
-                  <div>
-                    <span className="summary-value">{inactiveModels}</span>
-                    <span className="summary-label">Inactive</span>
-                  </div>
-                </div>
-
-                {managerMessage && <div className="comparison-tools__message">{managerMessage}</div>}
-
-                <div className="comparison-tools__content">
-                  <ModelManager />
-                </div>
-              </section>
-            )}
-
             <form onSubmit={handleSubmit} className="prompt-form">
               <div className="input-group">
                 <label htmlFor="prompt">Enter your prompt:</label>
@@ -1696,8 +1993,49 @@ function App() {
 
             {optimizerResult ? (
               <section className="optimizer-results">
+                <div className="optimizer-panel">
+                  <h3>Model-generated rewrites</h3>
+                  {optimizerError && <p className="optimizer-error">{optimizerError}</p>}
+                  {optimizerLoading && !optimizerError && (
+                    <p className="optimizer-empty">Generating improved prompts from selected models…</p>
+                  )}
+                  {!optimizerLoading &&
+                    !optimizerError &&
+                    activeModels.length === 0 &&
+                    Object.keys(optimizerAIResponses).length === 0 && (
+                    <p className="optimizer-empty">
+                      Activate at least one model in Compare to request AI rewrites.
+                    </p>
+                  )}
+                  {!optimizerLoading && Object.keys(optimizerAIResponses).length > 0 && (
+                    <div className="optimizer-grid optimizer-grid--compact">
+                      {Object.values(optimizerAIResponses).map((response) => (
+                        <div key={response.id} className="optimizer-panel">
+                          <h4>{response.name}</h4>
+                          <p className="optimizer-meta">
+                            Provider: {response.providerName} · Model: {response.model}
+                          </p>
+                          {response.error ? (
+                            <p className="optimizer-error">{response.error}</p>
+                          ) : response.content ? (
+                            <pre className="optimized-prompt-block optimized-prompt-block--model">{response.content}</pre>
+                          ) : (
+                            <p className="optimizer-empty">No content returned.</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="optimizer-results__header">
                   <h2>Optimized Prompt</h2>
+                  {optimizerResult.superPromptSourceCount > 0 && (
+                    <p className="optimizer-meta">
+                      Synthesized from {optimizerResult.superPromptSourceCount}{' '}
+                      model rewrite{optimizerResult.superPromptSourceCount > 1 ? 's' : ''}
+                    </p>
+                  )}
                   <div className="optimizer-copy">
                     {optimizerCopyStatus && (
                       <span className="optimizer-copy__status">{optimizerCopyStatus}</span>
